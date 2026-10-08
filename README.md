@@ -4,6 +4,8 @@ A custom departure board: a display showing live departures for public transport
 
 ![Demo](docs/demo_departure_board.gif)
 
+<img src="docs/display.jpeg" alt="Demo2" width="480">
+
 ## Hardware
 
 - ESP32 dev board
