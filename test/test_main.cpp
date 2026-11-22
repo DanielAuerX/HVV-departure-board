@@ -5,6 +5,7 @@
 #include "imhr_weather_logic.h"
 #include "imhr_button_logic.h"
 #include "imhr_dht_logic.h"
+#include "imhr_ventilation_logic.h"
 
 using namespace imhr;
 
@@ -247,6 +248,27 @@ TEST(DecodeDhtPulses, IsInvalidOnChecksumMismatch)
     bytesToPulses(data, pulses);
 
     EXPECT_FALSE(decodeDhtPulses(pulses).valid);
+}
+
+TEST(VentilationNeeded, StaysOffBelowOnThreshold)
+{
+    EXPECT_FALSE(ventilationNeeded(59, false));
+}
+
+TEST(VentilationNeeded, TurnsOnAtOnThreshold)
+{
+    EXPECT_TRUE(ventilationNeeded(60, false));
+}
+
+TEST(VentilationNeeded, StaysOnBetweenThresholds)
+{
+    EXPECT_TRUE(ventilationNeeded(57, true));
+    EXPECT_TRUE(ventilationNeeded(55, true));
+}
+
+TEST(VentilationNeeded, TurnsOffBelowOffThreshold)
+{
+    EXPECT_FALSE(ventilationNeeded(54, true));
 }
 
 int main(int argc, char **argv)

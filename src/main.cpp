@@ -6,6 +6,8 @@
 #include "imhr_weather.h"
 #include "imhr_button.h"
 #include "imhr_dht.h"
+#include "imhr_led.h"
+#include "imhr_ventilation_logic.h"
 #include "esp_sleep.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -26,6 +28,7 @@ const int sleepEndHour = 5;
 const int sleepEndMin = 0;
 const uint8_t viewButtonPin = 27;
 const uint8_t indoorSensorPin = 26;
+const uint8_t ventilationLedPin = 25;
 int counter = 0;
 
 enum class View
@@ -58,6 +61,7 @@ static imhr::BusDeparture shownBus = sharedBus;
 static imhr::TrainDeparture shownTrain = sharedTrain;
 static imhr::Weather shownWeather = sharedWeather;
 static imhr::IndoorClimate shownIndoor = sharedIndoor;
+static bool ventilationReminder = false;
 static int shownMinute = -1;
 
 static bool isNightTime()
@@ -196,6 +200,15 @@ static bool minuteChanged()
   return true;
 }
 
+static void updateVentilationReminder()
+{
+  if (!shownIndoor.valid)
+    return;
+
+  ventilationReminder = imhr::ventilationNeeded(shownIndoor.humidity, ventilationReminder);
+  imhr::ledSet(ventilationReminder);
+}
+
 static void renderCurrentView()
 {
   if (currentView == View::Departure)
@@ -216,6 +229,7 @@ void setup()
   imhr::displayInit();
   imhr::buttonInit(viewButtonPin);
   imhr::dhtInit(indoorSensorPin);
+  imhr::ledInit(ventilationLedPin);
   while (!imhr::connectWiFi())
   {
     imhr::displayMessage("!", "wifi problem");
@@ -235,6 +249,7 @@ void loop()
     counter++;
     Serial.println("still sleeping... zZzz... retry counter: " + String(counter));
     imhr::displaySleep();
+    imhr::ledSet(false);
     // it can cause issues with the wifi connection, when waking up...
     // esp_sleep_enable_timer_wakeup(5 * 60 * 1000000ULL);
     // esp_light_sleep_start();
@@ -249,6 +264,8 @@ void loop()
     currentView = currentView == View::Departure ? View::Weather : View::Departure;
 
   Updates updates = syncSharedData();
+  if (updates.indoor)
+    updateVentilationReminder();
   bool minuteTicked = minuteChanged();
 
   bool needsRedraw = currentView == View::Departure
