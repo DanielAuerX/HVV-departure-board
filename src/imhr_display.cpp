@@ -88,7 +88,7 @@ namespace imhr
         display.drawUTF8(128 - strW, y, right);
     }
 
-    void displayWeather(const Weather &weather, const tm *time)
+    void displayWeather(const Weather &weather, const IndoorClimate &indoor, const tm *time)
     {
         char clock[6] = "--:--";
         char date[12] = "";
@@ -101,23 +101,29 @@ namespace imhr
         char temperature[8] = "--";
         char minimum[8];
         char maximum[8];
-        char range[24] = "";
-        char rain[16] = "";
+        char forecast[24] = "";
         if (weather.valid)
         {
             formatTemperature(temperature, sizeof(temperature), weather.temperature);
             formatTemperature(minimum, sizeof(minimum), weather.temperatureMin);
             formatTemperature(maximum, sizeof(maximum), weather.temperatureMax);
-            snprintf(range, sizeof(range), "%s bis %s", minimum, maximum);
-            snprintf(rain, sizeof(rain), "Regen %d%%", weather.precipitationProbability);
+            snprintf(forecast, sizeof(forecast), "%s/%s  %d%%", minimum, maximum, weather.precipitationProbability);
+        }
+
+        char indoorLabel[24] = "innen --";
+        if (indoor.valid)
+        {
+            char indoorTemperature[8];
+            formatTemperature(indoorTemperature, sizeof(indoorTemperature), indoor.temperature);
+            snprintf(indoorLabel, sizeof(indoorLabel), "innen %s %d%%", indoorTemperature, indoor.humidity);
         }
 
         const char *condition = weather.valid ? conditionLabel(weather.condition) : "";
 
         display.clearBuffer();
         drawRow(u8g2_font_logisoso16_tf, clock, u8g2_font_ncenB08_tf, date, 20);
-        drawRow(u8g2_font_logisoso16_tf, temperature, u8g2_font_ncenB08_tf, condition, 42);
-        drawRow(u8g2_font_ncenB08_tf, range, u8g2_font_ncenB08_tf, rain, 62);
+        drawRow(u8g2_font_logisoso16_tf, temperature, u8g2_font_ncenB08_tf, indoorLabel, 42);
+        drawRow(u8g2_font_ncenB08_tf, condition, u8g2_font_ncenB08_tf, forecast, 62);
         display.sendBuffer();
     }
 

@@ -4,6 +4,7 @@
 #include "imhr_display_logic.h"
 #include "imhr_weather_logic.h"
 #include "imhr_button_logic.h"
+#include "imhr_dht_logic.h"
 
 using namespace imhr;
 
@@ -204,6 +205,48 @@ TEST(Debouncer, ReportsSecondPressAfterRelease)
     debouncer.update(false, 100);
     EXPECT_FALSE(debouncer.update(true, 150));
     EXPECT_TRUE(debouncer.update(true, 200));
+}
+
+static void bytesToPulses(const uint8_t data[5], uint16_t pulses[dhtFrameBits])
+{
+    const uint16_t zeroPulseUs = 27;
+    const uint16_t onePulseUs = 70;
+    for (int bit = 0; bit < dhtFrameBits; bit++)
+    {
+        bool isOne = data[bit / 8] & (0x80 >> (bit % 8));
+        pulses[bit] = isOne ? onePulseUs : zeroPulseUs;
+    }
+}
+
+TEST(DecodeDhtPulses, DecodesTemperatureAndHumidity)
+{
+    const uint8_t data[5] = {45, 0, 21, 3, 69};
+    uint16_t pulses[dhtFrameBits];
+    bytesToPulses(data, pulses);
+
+    IndoorClimate climate = decodeDhtPulses(pulses);
+
+    EXPECT_TRUE(climate.valid);
+    EXPECT_FLOAT_EQ(climate.temperature, 21.3f);
+    EXPECT_EQ(climate.humidity, 45);
+}
+
+TEST(DecodeDhtPulses, DecodesNegativeTemperature)
+{
+    const uint8_t data[5] = {80, 0, 2, 0x85, 215};
+    uint16_t pulses[dhtFrameBits];
+    bytesToPulses(data, pulses);
+
+    EXPECT_FLOAT_EQ(decodeDhtPulses(pulses).temperature, -2.5f);
+}
+
+TEST(DecodeDhtPulses, IsInvalidOnChecksumMismatch)
+{
+    const uint8_t data[5] = {45, 0, 21, 3, 70};
+    uint16_t pulses[dhtFrameBits];
+    bytesToPulses(data, pulses);
+
+    EXPECT_FALSE(decodeDhtPulses(pulses).valid);
 }
 
 int main(int argc, char **argv)

@@ -5,6 +5,7 @@
 #include "imhr_departure.h"
 #include "imhr_weather.h"
 #include "imhr_button.h"
+#include "imhr_dht.h"
 #include "esp_sleep.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -16,6 +17,7 @@ const uint32_t readableMessageDelay = 2000;  // 2 seconds
 const uint32_t shortPollingInterval = 30000; // 30 seconds
 const uint32_t announcementPollingInterval = shortPollingInterval * 20; // 10 minutes
 const uint32_t weatherPollingInterval = shortPollingInterval * 30;
+const uint32_t indoorPollingInterval = shortPollingInterval * 2;
 const char *timeZone = "CET-1CEST,M3.5.0,M10.5.0/3";
 const char *ntpServer = "pool.ntp.org";
 const int sleepStartHour = 0;
@@ -23,6 +25,7 @@ const int sleepStartMin = 30;
 const int sleepEndHour = 5;
 const int sleepEndMin = 0;
 const uint8_t viewButtonPin = 27;
+const uint8_t indoorSensorPin = 26;
 int counter = 0;
 
 enum class View
@@ -35,6 +38,7 @@ struct Updates
 {
   bool departure;
   bool weather;
+  bool indoor;
 };
 
 static SemaphoreHandle_t dataMutex;
@@ -45,12 +49,15 @@ static imhr::Announcement sharedAnnouncement = {false, ""};
 static imhr::Weather sharedWeather = {false, 0, 0, 0, 0, imhr::WeatherCondition::Unknown};
 static bool departureDirty = false;
 static bool announcementDirty = false;
+static imhr::IndoorClimate sharedIndoor = {false, 0, 0};
 static bool weatherDirty = false;
+static bool indoorDirty = false;
 
 static View currentView = View::Departure;
 static imhr::BusDeparture shownBus = sharedBus;
 static imhr::TrainDeparture shownTrain = sharedTrain;
 static imhr::Weather shownWeather = sharedWeather;
+static imhr::IndoorClimate shownIndoor = sharedIndoor;
 static int shownMinute = -1;
 
 static bool isNightTime()
@@ -71,6 +78,7 @@ static void fetchTask(void *param)
   unsigned long lastDepartureFetch = 0;
   unsigned long lastAnnouncementFetch = 0;
   unsigned long lastWeatherFetch = 0;
+  unsigned long lastIndoorRead = 0;
 
   for (;;)
   {
@@ -120,6 +128,18 @@ static void fetchTask(void *param)
         weatherDirty = true;
         xSemaphoreGive(dataMutex);
       }
+
+      if (lastIndoorRead == 0 || now - lastIndoorRead >= indoorPollingInterval)
+      {
+        lastIndoorRead = now;
+
+        imhr::IndoorClimate indoor = imhr::readIndoorClimate();
+
+        xSemaphoreTake(dataMutex, portMAX_DELAY);
+        sharedIndoor = indoor;
+        indoorDirty = true;
+        xSemaphoreGive(dataMutex);
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(200));
@@ -128,7 +148,7 @@ static void fetchTask(void *param)
 
 static Updates syncSharedData()
 {
-  Updates updates = {false, false};
+  Updates updates = {false, false, false};
   bool hasAnnouncementUpdate = false;
   imhr::Announcement announcement;
 
@@ -145,6 +165,12 @@ static Updates syncSharedData()
     shownWeather = sharedWeather;
     updates.weather = true;
     weatherDirty = false;
+  }
+  if (indoorDirty)
+  {
+    shownIndoor = sharedIndoor;
+    updates.indoor = true;
+    indoorDirty = false;
   }
   if (announcementDirty)
   {
@@ -180,7 +206,7 @@ static void renderCurrentView()
 
   struct tm timeinfo;
   bool hasTime = getLocalTime(&timeinfo, 0);
-  imhr::displayWeather(shownWeather, hasTime ? &timeinfo : nullptr);
+  imhr::displayWeather(shownWeather, shownIndoor, hasTime ? &timeinfo : nullptr);
 }
 
 void setup()
@@ -189,6 +215,7 @@ void setup()
   configTzTime(timeZone, ntpServer);
   imhr::displayInit();
   imhr::buttonInit(viewButtonPin);
+  imhr::dhtInit(indoorSensorPin);
   while (!imhr::connectWiFi())
   {
     imhr::displayMessage("!", "wifi problem");
@@ -226,7 +253,7 @@ void loop()
 
   bool needsRedraw = currentView == View::Departure
                          ? updates.departure
-                         : updates.weather || minuteTicked;
+                         : updates.weather || updates.indoor || minuteTicked;
 
   if (viewToggled || needsRedraw)
     renderCurrentView();
