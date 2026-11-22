@@ -12,5 +12,6 @@ namespace imhr
     };
 
     HttpResponse sendPostRequest(const String &url, const String &body);
+    HttpResponse sendGetRequest(const String &url);
     String signRequest(const char *payload, const char *secret);
 }

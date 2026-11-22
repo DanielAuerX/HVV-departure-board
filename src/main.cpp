@@ -3,6 +3,8 @@
 #include "imhr_display.h"
 #include "imhr_announcement.h"
 #include "imhr_departure.h"
+#include "imhr_weather.h"
+#include "imhr_button.h"
 #include "esp_sleep.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -13,19 +15,43 @@ const uint32_t sleepRetryDelay = 600000;     // 10 minutes
 const uint32_t readableMessageDelay = 2000;  // 2 seconds
 const uint32_t shortPollingInterval = 30000; // 30 seconds
 const uint32_t announcementPollingInterval = shortPollingInterval * 20; // 10 minutes
+const uint32_t weatherPollingInterval = shortPollingInterval * 30;
+const char *timeZone = "CET-1CEST,M3.5.0,M10.5.0/3";
+const char *ntpServer = "pool.ntp.org";
 const int sleepStartHour = 0;
 const int sleepStartMin = 30;
 const int sleepEndHour = 5;
 const int sleepEndMin = 0;
+const uint8_t viewButtonPin = 27;
 int counter = 0;
+
+enum class View
+{
+  Departure,
+  Weather
+};
+
+struct Updates
+{
+  bool departure;
+  bool weather;
+};
 
 static SemaphoreHandle_t dataMutex;
 
 static imhr::BusDeparture sharedBus = {"bus", -1};
 static imhr::TrainDeparture sharedTrain = {"train", -1};
 static imhr::Announcement sharedAnnouncement = {false, ""};
+static imhr::Weather sharedWeather = {false, 0, 0, 0, 0, imhr::WeatherCondition::Unknown};
 static bool departureDirty = false;
 static bool announcementDirty = false;
+static bool weatherDirty = false;
+
+static View currentView = View::Departure;
+static imhr::BusDeparture shownBus = sharedBus;
+static imhr::TrainDeparture shownTrain = sharedTrain;
+static imhr::Weather shownWeather = sharedWeather;
+static int shownMinute = -1;
 
 static bool isNightTime()
 {
@@ -44,6 +70,7 @@ static void fetchTask(void *param)
 {
   unsigned long lastDepartureFetch = 0;
   unsigned long lastAnnouncementFetch = 0;
+  unsigned long lastWeatherFetch = 0;
 
   for (;;)
   {
@@ -81,17 +108,87 @@ static void fetchTask(void *param)
 
         Serial.printf("free heap space after fetch: %lu\n", ESP.getFreeHeap());
       }
+
+      if (lastWeatherFetch == 0 || now - lastWeatherFetch >= weatherPollingInterval)
+      {
+        lastWeatherFetch = now;
+
+        imhr::Weather weather = imhr::fetchWeather();
+
+        xSemaphoreTake(dataMutex, portMAX_DELAY);
+        sharedWeather = weather;
+        weatherDirty = true;
+        xSemaphoreGive(dataMutex);
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(200));
   }
 }
 
+static Updates syncSharedData()
+{
+  Updates updates = {false, false};
+  bool hasAnnouncementUpdate = false;
+  imhr::Announcement announcement;
+
+  xSemaphoreTake(dataMutex, portMAX_DELAY);
+  if (departureDirty)
+  {
+    shownBus = sharedBus;
+    shownTrain = sharedTrain;
+    updates.departure = true;
+    departureDirty = false;
+  }
+  if (weatherDirty)
+  {
+    shownWeather = sharedWeather;
+    updates.weather = true;
+    weatherDirty = false;
+  }
+  if (announcementDirty)
+  {
+    announcement = sharedAnnouncement;
+    hasAnnouncementUpdate = true;
+    announcementDirty = false;
+  }
+  xSemaphoreGive(dataMutex);
+
+  if (hasAnnouncementUpdate)
+    imhr::setAnnouncementMessage(announcement.hasMessage ? announcement.summary.c_str() : nullptr);
+
+  return updates;
+}
+
+static bool minuteChanged()
+{
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 0) || timeinfo.tm_min == shownMinute)
+    return false;
+
+  shownMinute = timeinfo.tm_min;
+  return true;
+}
+
+static void renderCurrentView()
+{
+  if (currentView == View::Departure)
+  {
+    imhr::displayDeparture(shownBus.line.c_str(), shownBus.minutes, shownTrain.line.c_str(), shownTrain.minutes);
+    return;
+  }
+
+  struct tm timeinfo;
+  bool hasTime = getLocalTime(&timeinfo, 0);
+  imhr::displayWeather(shownWeather, hasTime ? &timeinfo : nullptr);
+}
+
 void setup()
 {
   Serial.begin(115200);
-  configTime(3600, 3600, "pool.ntp.org"); // UTC+1, +1 DST
+  configTzTime(timeZone, ntpServer);
   imhr::displayInit();
+  imhr::buttonInit(viewButtonPin);
   while (!imhr::connectWiFi())
   {
     imhr::displayMessage("!", "wifi problem");
@@ -120,34 +217,22 @@ void loop()
   counter = 0;
   imhr::displayWake();
 
-  bool hasDepartureUpdate = false;
-  bool hasAnnouncementUpdate = false;
-  imhr::BusDeparture bus;
-  imhr::TrainDeparture train;
-  imhr::Announcement announcement;
+  bool viewToggled = imhr::buttonWasPressed();
+  if (viewToggled)
+    currentView = currentView == View::Departure ? View::Weather : View::Departure;
 
-  xSemaphoreTake(dataMutex, portMAX_DELAY);
-  if (departureDirty)
-  {
-    bus = sharedBus;
-    train = sharedTrain;
-    hasDepartureUpdate = true;
-    departureDirty = false;
-  }
-  if (announcementDirty)
-  {
-    announcement = sharedAnnouncement;
-    hasAnnouncementUpdate = true;
-    announcementDirty = false;
-  }
-  xSemaphoreGive(dataMutex);
+  Updates updates = syncSharedData();
+  bool minuteTicked = minuteChanged();
 
-  if (hasDepartureUpdate)
-    imhr::displayDeparture(bus.line.c_str(), bus.minutes, train.line.c_str(), train.minutes);
+  bool needsRedraw = currentView == View::Departure
+                         ? updates.departure
+                         : updates.weather || minuteTicked;
 
-  if (hasAnnouncementUpdate)
-    imhr::setAnnouncementMessage(announcement.hasMessage ? announcement.summary.c_str() : nullptr);
+  if (viewToggled || needsRedraw)
+    renderCurrentView();
 
-  imhr::tickScroll();
+  if (currentView == View::Departure)
+    imhr::tickScroll();
+
   delay(1);
 }

@@ -2,6 +2,8 @@
 #include <ArduinoJson.h>
 #include "imhr_departure_logic.h"
 #include "imhr_display_logic.h"
+#include "imhr_weather_logic.h"
+#include "imhr_button_logic.h"
 
 using namespace imhr;
 
@@ -80,6 +82,128 @@ TEST(DetermineMinuteDisplay, ShowsMinutesCount)
     char buf[12];
     determineMinuteDisplay(buf, sizeof(buf), 7);
     EXPECT_STREQ(buf, "7 min");
+}
+
+TEST(ConditionFromWmoCode, MapsCodeGroups)
+{
+    EXPECT_EQ(conditionFromWmoCode(0), WeatherCondition::Clear);
+    EXPECT_EQ(conditionFromWmoCode(2), WeatherCondition::PartlyCloudy);
+    EXPECT_EQ(conditionFromWmoCode(3), WeatherCondition::Cloudy);
+    EXPECT_EQ(conditionFromWmoCode(45), WeatherCondition::Fog);
+    EXPECT_EQ(conditionFromWmoCode(53), WeatherCondition::Drizzle);
+    EXPECT_EQ(conditionFromWmoCode(63), WeatherCondition::Rain);
+    EXPECT_EQ(conditionFromWmoCode(81), WeatherCondition::Rain);
+    EXPECT_EQ(conditionFromWmoCode(75), WeatherCondition::Snow);
+    EXPECT_EQ(conditionFromWmoCode(86), WeatherCondition::Snow);
+    EXPECT_EQ(conditionFromWmoCode(95), WeatherCondition::Thunderstorm);
+}
+
+TEST(ConditionFromWmoCode, ReturnsUnknownForUnmappedCode)
+{
+    EXPECT_EQ(conditionFromWmoCode(42), WeatherCondition::Unknown);
+}
+
+TEST(ConditionLabel, ReturnsGermanLabel)
+{
+    EXPECT_STREQ(conditionLabel(WeatherCondition::Rain), "Regen");
+    EXPECT_STREQ(conditionLabel(WeatherCondition::Unknown), "?");
+}
+
+TEST(ParseWeather, ReadsCurrentAndDailyValues)
+{
+    JsonDocument doc;
+    deserializeJson(doc, R"({
+        "current": {"temperature_2m": 3.9, "weather_code": 3},
+        "daily": {"temperature_2m_max": [4.6], "temperature_2m_min": [-0.5], "precipitation_probability_max": [8]}
+    })");
+
+    Weather weather = parseWeather(doc);
+
+    EXPECT_TRUE(weather.valid);
+    EXPECT_FLOAT_EQ(weather.temperature, 3.9f);
+    EXPECT_FLOAT_EQ(weather.temperatureMin, -0.5f);
+    EXPECT_FLOAT_EQ(weather.temperatureMax, 4.6f);
+    EXPECT_EQ(weather.precipitationProbability, 8);
+    EXPECT_EQ(weather.condition, WeatherCondition::Cloudy);
+}
+
+TEST(ParseWeather, IsInvalidWhenCurrentIsMissing)
+{
+    JsonDocument doc;
+    deserializeJson(doc, R"({"daily": {"temperature_2m_max": [4.6]}})");
+
+    EXPECT_FALSE(parseWeather(doc).valid);
+}
+
+TEST(FormatTemperature, RoundsToWholeDegrees)
+{
+    char buf[8];
+    formatTemperature(buf, sizeof(buf), 3.6f);
+    EXPECT_STREQ(buf, "4°");
+}
+
+TEST(FormatTemperature, ShowsNegativeValues)
+{
+    char buf[8];
+    formatTemperature(buf, sizeof(buf), -2.4f);
+    EXPECT_STREQ(buf, "-2°");
+}
+
+TEST(FormatTemperature, ShowsZeroInsteadOfNegativeZero)
+{
+    char buf[8];
+    formatTemperature(buf, sizeof(buf), -0.4f);
+    EXPECT_STREQ(buf, "0°");
+}
+
+TEST(FormatDate, ShowsGermanWeekdayAndDate)
+{
+    tm time = {};
+    time.tm_wday = 6;
+    time.tm_mday = 22;
+    time.tm_mon = 10;
+    char buf[12];
+    formatDate(buf, sizeof(buf), time);
+    EXPECT_STREQ(buf, "Sa 22.11.");
+}
+
+TEST(Debouncer, ReportsStablePressOnce)
+{
+    Debouncer debouncer;
+    EXPECT_FALSE(debouncer.update(true, 0));
+    EXPECT_FALSE(debouncer.update(true, 10));
+    EXPECT_TRUE(debouncer.update(true, 40));
+    EXPECT_FALSE(debouncer.update(true, 100));
+}
+
+TEST(Debouncer, IgnoresBouncing)
+{
+    Debouncer debouncer;
+    EXPECT_FALSE(debouncer.update(true, 0));
+    EXPECT_FALSE(debouncer.update(false, 5));
+    EXPECT_FALSE(debouncer.update(true, 10));
+    EXPECT_FALSE(debouncer.update(true, 35));
+    EXPECT_TRUE(debouncer.update(true, 41));
+}
+
+TEST(Debouncer, DoesNotReportRelease)
+{
+    Debouncer debouncer;
+    debouncer.update(true, 0);
+    EXPECT_TRUE(debouncer.update(true, 40));
+    EXPECT_FALSE(debouncer.update(false, 50));
+    EXPECT_FALSE(debouncer.update(false, 100));
+}
+
+TEST(Debouncer, ReportsSecondPressAfterRelease)
+{
+    Debouncer debouncer;
+    debouncer.update(true, 0);
+    debouncer.update(true, 40);
+    debouncer.update(false, 50);
+    debouncer.update(false, 100);
+    EXPECT_FALSE(debouncer.update(true, 150));
+    EXPECT_TRUE(debouncer.update(true, 200));
 }
 
 int main(int argc, char **argv)

@@ -78,6 +78,49 @@ namespace imhr
         display.sendBuffer();
     }
 
+    static void drawRow(const uint8_t *leftFont, const char *left, const uint8_t *rightFont, const char *right, int y)
+    {
+        display.setFont(leftFont);
+        display.drawUTF8(0, y, left);
+
+        display.setFont(rightFont);
+        int strW = display.getUTF8Width(right);
+        display.drawUTF8(128 - strW, y, right);
+    }
+
+    void displayWeather(const Weather &weather, const tm *time)
+    {
+        char clock[6] = "--:--";
+        char date[12] = "";
+        if (time)
+        {
+            strftime(clock, sizeof(clock), "%H:%M", time);
+            formatDate(date, sizeof(date), *time);
+        }
+
+        char temperature[8] = "--";
+        char minimum[8];
+        char maximum[8];
+        char range[24] = "";
+        char rain[16] = "";
+        if (weather.valid)
+        {
+            formatTemperature(temperature, sizeof(temperature), weather.temperature);
+            formatTemperature(minimum, sizeof(minimum), weather.temperatureMin);
+            formatTemperature(maximum, sizeof(maximum), weather.temperatureMax);
+            snprintf(range, sizeof(range), "%s bis %s", minimum, maximum);
+            snprintf(rain, sizeof(rain), "Regen %d%%", weather.precipitationProbability);
+        }
+
+        const char *condition = weather.valid ? conditionLabel(weather.condition) : "";
+
+        display.clearBuffer();
+        drawRow(u8g2_font_logisoso16_tf, clock, u8g2_font_ncenB08_tf, date, 20);
+        drawRow(u8g2_font_logisoso16_tf, temperature, u8g2_font_ncenB08_tf, condition, 42);
+        drawRow(u8g2_font_ncenB08_tf, range, u8g2_font_ncenB08_tf, rain, 62);
+        display.sendBuffer();
+    }
+
     void setAnnouncementMessage(const char *message)
     {
         String newMessage = message ? message : "";

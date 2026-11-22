@@ -36,4 +36,14 @@ namespace imhr
         http.end();
         return {code, bodyResponse};
     }
+
+    HttpResponse sendGetRequest(const String &url)
+    {
+        HTTPClient http;
+        http.begin(url);
+        int code = http.GET();
+        String bodyResponse = http.getString();
+        http.end();
+        return {code, bodyResponse};
+    }
 }
